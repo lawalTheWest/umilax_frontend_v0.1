@@ -23,7 +23,11 @@
       "package": "com.anonymous.frontendumilax"
     },
     "extra": {
-      "API_URL": "https://umilax.onrender.com"
+      "API_URL": "https://umilax.onrender.com",
+      "router": {},
+      "eas": {
+        "projectId": "ecbeb0ee-3643-42df-92b7-da742b83c2a3"
+      }
     },
     "web": {
       "output": "static",
@@ -39,9 +43,9 @@
           "resizeMode": "contain",
           "backgroundColor": "#ffffff",
           "dark": {
-        "expoRouter": {
-          "appRoot": "app"
-        }
+            "expoRouter": {
+              "appRoot": "app"
+            }
           }
         }
       ]
