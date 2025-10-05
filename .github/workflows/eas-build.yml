@@ -19,8 +19,7 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Install dependencies (frontend-umilax)
-        working-directory: frontend-umilax
+      - name: Install dependencies (repo root)
         run: |
           echo "npm version:" && npm --version
           echo "Using npm install --legacy-peer-deps to avoid lockfile npm-version issues"
