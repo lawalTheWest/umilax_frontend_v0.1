@@ -1,0 +1,7 @@
+
+request to https://api.expo.dev/graphql failed, reason: 
+CombinedError: [Network] request to https://api.expo.dev/graphql failed, reason: 
+    at makeErrorResult (/home/lawal/.config/nvm/versions/node/v20.19.5/lib/node_modules/eas-cli/node_modules/@urql/core/dist/urql-core-chunk.js:495:10)
+    at fetchOperation (/home/lawal/.config/nvm/versions/node/v20.19.5/lib/node_modules/eas-cli/node_modules/@urql/core/dist/urql-core-chunk.js:756:11)
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async /home/lawal/.config/nvm/versions/node/v20.19.5/lib/node_modules/eas-cli/node_modules/wonka/dist/wonka.js:346:20
