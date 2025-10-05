@@ -20,14 +20,8 @@ jobs:
           node-version: '20'
 
       - name: Install dependencies
-        run: |
-          if [ -f package-lock.json ] || [ -f frontend-umilax/package-lock.json ]; then
-            echo "Found package-lock.json — running npm ci"
-            npm ci
-          else
-            echo "No package-lock.json found — running npm install to generate lockfile"
-            npm install
-          fi
+        working-directory: frontend-umilax
+        run: npm ci
 
       - name: Install EAS CLI and jq
         run: |
@@ -36,6 +30,7 @@ jobs:
           sudo apt-get install -y jq
 
       - name: Run EAS build, fetch artifact, and publish to GitHub Release
+        working-directory: frontend-umilax
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
