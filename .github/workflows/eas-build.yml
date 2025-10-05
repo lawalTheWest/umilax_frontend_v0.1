@@ -19,15 +19,12 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Install dependencies
+      - name: Install dependencies (frontend-umilax)
+        working-directory: frontend-umilax
         run: |
-          if [ -f package-lock.json ] || [ -f frontend-umilax/package-lock.json ]; then
-            echo "Found package-lock.json — running npm ci"
-            npm ci
-          else
-            echo "No package-lock.json found — running npm install to generate lockfile"
-            npm install
-          fi
+          echo "npm version:" && npm --version
+          echo "Using npm install --legacy-peer-deps to avoid lockfile npm-version issues"
+          npm install --legacy-peer-deps
 
       - name: Install EAS CLI and jq
         run: |
