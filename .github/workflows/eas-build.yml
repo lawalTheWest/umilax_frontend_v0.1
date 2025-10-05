@@ -21,7 +21,13 @@ jobs:
 
       - name: Install dependencies
         run: |
-          npm ci
+          if [ -f package-lock.json ] || [ -f frontend-umilax/package-lock.json ]; then
+            echo "Found package-lock.json — running npm ci"
+            npm ci
+          else
+            echo "No package-lock.json found — running npm install to generate lockfile"
+            npm install
+          fi
 
       - name: Install EAS CLI and jq
         run: |
