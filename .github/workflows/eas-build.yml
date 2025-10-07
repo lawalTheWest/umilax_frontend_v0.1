@@ -35,7 +35,7 @@ jobs:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         run: |
           set -euxo pipefail
-          npm install -g eas-cli
+          npm install -g eas-cli --legacy-peer-deps
           sudo apt-get update
           sudo apt-get install -y jq
 
