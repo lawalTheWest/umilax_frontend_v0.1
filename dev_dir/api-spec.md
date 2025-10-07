@@ -325,3 +325,163 @@ The backend registers several router-mounted resources under their app prefixes.
 
 Notes:
 - Router-mounted prefixes can produce paths that combine the include prefix and the router prefix (e.g., `/shops/shops/` if the `shops` app registers `shops` on its router then is included at `/shops/`). In this spec I used the full logical paths discovered in code; adjust as necessary for human-facing documentation.
+
+---
+
+## Frontend Integration Notes
+
+### Base URL
+Production: `https://umilax.onrender.com`
+
+### Authentication Headers
+All authenticated requests must include:
+```
+Authorization: Bearer <access_token>
+Content-Type: application/json
+```
+
+### Common Request Patterns
+
+#### Login and Token Storage
+```javascript
+// Login
+POST /users/login/
+Body: { username: string, password: string }
+Response: { access: string, refresh: string, user: {...}, role: string }
+
+// Store tokens securely in Expo SecureStore
+await SecureStore.setItemAsync('access_token', response.access);
+await SecureStore.setItemAsync('refresh_token', response.refresh);
+```
+
+#### Token Refresh on 401
+```javascript
+// When receiving 401 Unauthorized:
+POST /auth/refresh/
+Body: { refresh: <refresh_token> }
+Response: { access: string }
+
+// Update stored access token
+await SecureStore.setItemAsync('access_token', response.access);
+```
+
+#### Query Parameters
+Use URLSearchParams for filtering:
+```javascript
+const params = new URLSearchParams({
+  shop_id: '1',
+  date_from: '2024-01-01',
+  date_to: '2024-12-31'
+});
+const url = `${BASE_URL}/transactions/?${params.toString()}`;
+```
+
+### Response Data Types
+
+#### Transaction
+```typescript
+{
+  id: string;
+  timestamp: string; // ISO 8601
+  amount: number;
+  services: string[];
+  renderedBy: string;
+  recordedBy: string;
+  shop: string;
+  type: string;
+  description: string;
+  payment_type?: string;
+}
+```
+
+#### Expense
+```typescript
+{
+  id: number;
+  description: string;
+  amount: number;
+  status: 'pending' | 'approved' | 'rejected';
+  deduct_before_division: boolean;
+  receipt: string | null;
+  created_at: string;
+}
+```
+
+#### Shop
+```typescript
+{
+  id: number;
+  name: string;
+  location: string;
+  division_base: string; // Percentage as string
+}
+```
+
+#### User
+```typescript
+{
+  id: number;
+  name: string;
+  email: string;
+  role: 'CEO' | 'Secretary' | 'Employee';
+  is_active: boolean;
+  shop?: number;
+}
+```
+
+### Offline Queue Support
+
+For offline functionality, queue failed requests:
+```javascript
+// Check network status
+const netInfo = await NetInfo.fetch();
+
+if (!netInfo.isConnected) {
+  // Queue locally
+  await addToQueue({
+    id: uuidv4(),
+    endpoint: '/transactions/record/',
+    method: 'POST',
+    body: transactionData
+  });
+} else {
+  // POST directly
+  await fetch(url, { method: 'POST', body: JSON.stringify(data) });
+}
+
+// Auto-sync when online
+NetInfo.addEventListener(async (state) => {
+  if (state.isConnected) {
+    await syncQueue(token);
+  }
+});
+```
+
+### Error Handling
+
+Backend returns errors in format:
+```json
+{ "error": "Error message" }
+```
+
+Frontend should handle:
+- 400: Validation errors (show to user)
+- 401: Token expired (refresh token, retry, or re-login)
+- 403: Insufficient permissions (check role)
+- 404: Resource not found
+- 500: Server error (retry or show error)
+
+### Recommended Frontend Utils
+
+See `utils/` directory:
+- `api.ts` - Base URL and API helpers
+- `authStorage.ts` - Secure token management
+- `offlineQueue.ts` - Offline sync functionality
+
+### Frontend Documentation
+
+For complete frontend documentation:
+- [README.md](../README.md) - Setup and overview
+- [DEVELOPER_GUIDE.md](../DEVELOPER_GUIDE.md) - Development guide
+- [FRONTEND_API_GUIDE.md](../FRONTEND_API_GUIDE.md) - API integration patterns
+- [FEATURES.md](../FEATURES.md) - Feature documentation
