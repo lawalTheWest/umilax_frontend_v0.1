@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - main
+      - dev
 
 jobs:
   build:
@@ -18,15 +19,22 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: 'npm'
 
       - name: Install dependencies (repo root)
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         run: |
+          set -euxo pipefail
           echo "npm version:" && npm --version
           echo "Using npm install --legacy-peer-deps to avoid lockfile npm-version issues"
           npm install --legacy-peer-deps
 
       - name: Install EAS CLI and jq
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         run: |
+          set -euxo pipefail
           npm install -g eas-cli
           sudo apt-get update
           sudo apt-get install -y jq
@@ -36,7 +44,7 @@ jobs:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -euo pipefail
+          set -euxo pipefail
           echo "whoami:" && eas whoami
 
           echo "Starting EAS build (non-interactive)..."
