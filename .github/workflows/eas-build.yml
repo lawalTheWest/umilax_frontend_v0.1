@@ -26,6 +26,22 @@ jobs:
           node-version: '20'
           cache: 'npm'
 
+      - name: Debug environment (safe)
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          set -euxo pipefail
+          echo "Runner uname:" && uname -a
+          echo "Node version:" && node --version || true
+          echo "npm version:" && npm --version || true
+          echo "Git ref: ${GITHUB_REF}"
+          # Do NOT print secrets. Only indicate presence/absence.
+          if [ -z "${EXPO_TOKEN:-}" ]; then
+            echo "EXPO_TOKEN: MISSING"
+          else
+            echo "EXPO_TOKEN: PRESENT"
+          fi
+
       - name: Install dependencies (repo root)
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}

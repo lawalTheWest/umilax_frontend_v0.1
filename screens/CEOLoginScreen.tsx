@@ -20,10 +20,12 @@ export default function CEOLoginScreen() {
   const handleLogin = async () => {
     setLoading(true);
     try {
+      // Send both email and username (email-first). Some backends expect 'email' as the identifier.
+      const bodyPayload = { email, username: email, password };
       const res = await fetch(`${BASE_API_URL}/auth/token/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: email, password }),
+        body: JSON.stringify(bodyPayload),
       });
       if (!res.ok) {
         const text = await res.text();
