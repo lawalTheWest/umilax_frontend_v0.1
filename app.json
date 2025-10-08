@@ -1,7 +1,7 @@
 {
   "expo": {
   "name": "UMILAX",
-  "slug": "umilax",
+  "slug": "frontend-umilax",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
@@ -53,6 +53,10 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    }
+    ,
+    "cli": {
+      "appVersionSource": "appConfig"
     }
   }
 }
