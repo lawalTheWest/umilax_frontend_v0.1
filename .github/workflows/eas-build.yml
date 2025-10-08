@@ -79,16 +79,42 @@ jobs:
           echo "Build output (tail):"
           echo "$build_output" | tail -n 200 || true
 
-          # Try to extract the final JSON payload from output. Look for the first line that starts with '{' and contains "id".
-          json_candidate=$(echo "$build_output" | awk 'BEGIN{p=0} { if (match($0,/\{"id"/)) p=1; if(p) print }')
+          # Try to extract the final JSON payload from output. EAS sometimes prints a JSON array
+          # or additional log lines. We'll extract the first JSON object that contains an "id" field.
+          # Strategy:
+          #  - Prefer any complete JSON object lines
+          #  - If output is a JSON array, try to parse it and take the first element with an id
+          #  - As a last resort, grep for the first substring that looks like a JSON object with "id"
 
-          if [ -z "$json_candidate" ]; then
+          raw_json_lines=$(echo "$build_output" | sed -n '1,\$p')
+
+          # 1) If output is a pure JSON array/object, try parsing whole output with jq
+          if echo "$raw_json_lines" | jq -e '.' >/dev/null 2>&1; then
+            # valid JSON (array or object)
+            if echo "$raw_json_lines" | jq -e 'type=="array"' >/dev/null 2>&1; then
+              # take the first element that has an id
+              json_candidate=$(echo "$raw_json_lines" | jq -c '.[] | select(.id) | . ' | head -n1 || true)
+            else
+              # object
+              json_candidate=$(echo "$raw_json_lines" | jq -c '. | select(.id)') || true
+            fi
+          fi
+
+          # 2) If json_candidate empty, try to extract any JSON object-like substring that contains "\"id\""
+          if [ -z "${json_candidate:-}" ]; then
+            # Grep for likely JSON object lines containing "id" and pick first
+            json_candidate=$(echo "$build_output" | grep -o '{[^}]*"id"[^}]*}' | head -n1 || true)
+          fi
+
+          # 3) Fail if still empty
+          if [ -z "${json_candidate:-}" ]; then
             echo "ERROR: Could not locate JSON object in eas build output" >&2
-            echo "Raw output:" >&2
-            echo "$build_output" >&2
+            echo "Raw output (tail 400 lines):" >&2
+            echo "$build_output" | tail -n 400 >&2
             exit 1
           fi
 
+          # Validate the extracted candidate is valid JSON
           if ! echo "$json_candidate" | jq -e '.' >/dev/null 2>&1; then
             echo "ERROR: Extracted JSON is invalid" >&2
             echo "$json_candidate" >&2
