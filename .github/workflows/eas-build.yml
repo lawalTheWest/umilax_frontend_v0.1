@@ -86,7 +86,8 @@ jobs:
           #  - If output is a JSON array, try to parse it and take the first element with an id
           #  - As a last resort, grep for the first substring that looks like a JSON object with "id"
 
-          raw_json_lines=$(echo "$build_output" | sed -n '1,\$p')
+          # Use the full build output as raw JSON candidate source (avoid sed quoting issues)
+          raw_json_lines="$build_output"
 
           # 1) If output is a pure JSON array/object, try parsing whole output with jq
           if echo "$raw_json_lines" | jq -e '.' >/dev/null 2>&1; then
@@ -126,6 +127,11 @@ jobs:
           BUILD_ID=$(echo "$build_json" | jq -r '.id // empty')
           ARTIFACT_URL=$(echo "$build_json" | jq -r '(.artifacts.buildUrl // .artifacts[]?.url // .artifacts.applicationArchiveUrl // empty) | select(. != null and . != "")' | head -n1)
 
+          # Add detailed logging for debugging
+          echo "Extracted BUILD_ID: $BUILD_ID"
+          echo "Successfully extracted artifact URL: $ARTIFACT_URL"
+          echo "Proceeding to download..."
+
           if [ -z "$BUILD_ID" ]; then
             echo "ERROR: Could not determine build id from build JSON" >&2
             echo "$build_json" | jq '.' >&2
@@ -147,50 +153,83 @@ jobs:
           timestamp=$(date +%Y%m%d-%H%M%S)
           filename="app-android-${timestamp}-${BUILD_ID:0:8}.apk"
 
-          echo "Downloading artifact to build_artifacts/$filename..."
-          curl -L --fail --retry 3 --retry-delay 5 "$ARTIFACT_URL" -o "build_artifacts/$filename"
+          echo "Attempting to download artifact from: $ARTIFACT_URL"
+          # Use curl to write the file and capture HTTP response code
+          http_code=$(curl -L --silent --show-error --write-out "%{http_code}" --output "build_artifacts/$filename" --retry 3 --retry-delay 5 "$ARTIFACT_URL" || true)
+          echo "Download HTTP status code: ${http_code:-unknown}"
 
-          if [ ! -f "build_artifacts/$filename" ] || [ ! -s "build_artifacts/$filename" ]; then
-            echo "ERROR: Download failed or file empty" >&2
+          if [ "${http_code:-0}" -ne 200 ] && [ "${http_code:-0}" -ne 201 ]; then
+            echo "ERROR: Artifact download failed with HTTP status $http_code" >&2
+            echo "Attempted URL: $ARTIFACT_URL" >&2
+            ls -l "build_artifacts" || true
             exit 1
           fi
 
-          file_size=$(stat -f%z "build_artifacts/$filename" 2>/dev/null || stat -c%s "build_artifacts/$filename" 2>/dev/null || echo "unknown")
-          echo "Downloaded APK size: $file_size bytes"
+          # Ensure file exists and is non-empty
+          if [ ! -f "build_artifacts/$filename" ] || [ ! -s "build_artifacts/$filename" ]; then
+            echo "ERROR: Download failed or file empty after HTTP $http_code" >&2
+            ls -l "build_artifacts/$filename" || true
+            exit 1
+          fi
 
-          echo "Creating GitHub release..."
+          file_size=$(stat -c%s "build_artifacts/$filename" 2>/dev/null || echo "unknown")
+          echo "Download completed, file size: $file_size bytes"
+
+          echo "Creating GitHub release with tag: $tag"
           tag="android-build-${{ github.run_id }}"
           name="Android Build #${{ github.run_number }}"
           body="**Android APK from EAS Build**%0A%0A- Build ID: \`$BUILD_ID\`%0A- Commit: \`${{ github.sha }}\`%0A- Branch: \`${{ github.ref_name }}\`%0A- Timestamp: \`$timestamp\`%0A- File: \`$filename\`"
-
-          release_response=$(curl -s -X POST \
+          release_response_file=$(mktemp)
+          release_http_code=$(curl --silent --show-error --write-out "%{http_code}" -X POST \
             -H "Authorization: token $GITHUB_TOKEN" \
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/${{ github.repository }}/releases" \
-            -d "{\"tag_name\": \"$tag\", \"name\": \"$name\", \"body\": \"$body\", \"draft\": false, \"prerelease\": false}")
+            -d "{\"tag_name\": \"$tag\", \"name\": \"$name\", \"body\": \"$body\", \"draft\": false, \"prerelease\": false}" \
+            -o "$release_response_file" || true)
 
-          upload_url=$(echo "$release_response" | jq -r '.upload_url | select(. != null)' | sed -e 's/{?name,label}//')
+          echo "Release creation HTTP status: ${release_http_code:-unknown}"
+          echo "Release response:" && cat "$release_response_file" || true
 
-          if [ -z "$upload_url" ] || [ "$upload_url" = "null" ]; then
-            echo "ERROR: Could not create GitHub release" >&2
-            echo "$release_response" | jq '.' >&2
+          upload_url=$(jq -r '.upload_url // empty' < "$release_response_file" | sed -e 's/{?name,label}//' || true)
+
+          if [ -z "$upload_url" ]; then
+            echo "ERROR: Could not create GitHub release or upload_url missing" >&2
+            cat "$release_response_file" >&2 || true
+            rm -f "$release_response_file" || true
             exit 1
           fi
 
+          echo "Release created successfully, upload URL: $upload_url"
           echo "Uploading APK to release..."
-          upload_response=$(curl -s --fail-with-body -X POST \
+
+          upload_response_file=$(mktemp)
+          upload_http_code=$(curl --silent --show-error --write-out "%{http_code}" -X POST \
             -H "Authorization: token $GITHUB_TOKEN" \
             -H "Content-Type: application/vnd.android.package-archive" \
             --data-binary @"build_artifacts/$filename" \
-            "$upload_url?name=$filename" 2>&1 || true)
+            "$upload_url?name=$filename" \
+            -o "$upload_response_file" || true)
 
-          if echo "$upload_response" | jq -e '.browser_download_url' >/dev/null 2>&1; then
-            download_url=$(echo "$upload_response" | jq -r '.browser_download_url')
+          echo "Upload HTTP status: ${upload_http_code:-unknown}"
+          echo "Upload response:" && cat "$upload_response_file" || true
+
+          if [ "${upload_http_code:-0}" -ne 201 ] && [ "${upload_http_code:-0}" -ne 200 ]; then
+            echo "ERROR: Failed to upload APK to release (HTTP $upload_http_code)" >&2
+            rm -f "$release_response_file" "$upload_response_file" || true
+            exit 1
+          fi
+
+          # Parse download URL
+          download_url=$(jq -r '.browser_download_url // empty' < "$upload_response_file" || true)
+          if [ -z "$download_url" ]; then
+            echo "WARNING: Upload succeeded but could not parse browser_download_url" >&2
+            echo "You can find the release at: https://github.com/${{ github.repository }}/releases/tag/$tag"
+          else
             echo "✅ Upload complete!"
             echo "📦 APK: $download_url"
             echo "🔗 Release: https://github.com/${{ github.repository }}/releases/tag/$tag"
-          else
-            echo "ERROR: Failed to upload APK to release" >&2
-            echo "$upload_response" >&2
-            exit 1
           fi
+
+          rm -f "$release_response_file" "$upload_response_file" || true
+
+          echo "✅ Workflow completed successfully!"
