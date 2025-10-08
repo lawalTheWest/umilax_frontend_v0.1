@@ -62,7 +62,7 @@ jobs:
           sudo apt-get install -y jq
           echo "EAS CLI version:" && eas --version
 
-      - name: Run EAS build (Android only), fetch artifact, and publish to GitHub Release
+      - name: Run EAS build (Android only), wait for completion, fetch artifact, and publish to GitHub Release
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -70,127 +70,68 @@ jobs:
           set -euxo pipefail
           echo "Authenticated as:" && eas whoami
 
-          echo "Starting EAS build for Android only (non-interactive, no-wait)..."
-          
-          # Capture build ID directly from build command output
-          build_output=$(eas build --platform android --profile production --non-interactive --no-wait --json 2>&1 || true)
-          echo "Build command output:"
-          echo "$build_output"
-          
-          # Try to extract build ID from JSON output
-          BUILD_ID=$(echo "$build_output" | jq -r '.id // empty' 2>/dev/null || true)
-          
-          # Fallback: if --json not supported or build ID not in output, get most recent build
-          if [ -z "$BUILD_ID" ] || [ "$BUILD_ID" = "null" ]; then
-            echo "Could not extract build ID from JSON output, falling back to build:list..."
-            sleep 5
-            BUILD_ID=$(eas build:list --platform android --limit 1 --non-interactive --json | jq -r '.[0].id')
-          fi
-          
-          if [ -z "$BUILD_ID" ] || [ "$BUILD_ID" = "null" ]; then
-            echo "ERROR: Could not determine build ID" >&2
+          echo "Starting EAS build for Android only (non-interactive, wait for completion)..."
+
+          # Start the build and wait for EAS to finish. --wait streams progress and returns final JSON.
+          build_output=$(eas build --platform android --profile production --non-interactive --wait --json 2>&1 || true)
+
+          # Print tail of output for visibility (don't dump full logs)
+          echo "Build output (tail):"
+          echo "$build_output" | tail -n 200 || true
+
+          # Try to extract the final JSON payload from output. Look for the first line that starts with '{' and contains "id".
+          json_candidate=$(echo "$build_output" | awk 'BEGIN{p=0} { if (match($0,/\{"id"/)) p=1; if(p) print }')
+
+          if [ -z "$json_candidate" ]; then
+            echo "ERROR: Could not locate JSON object in eas build output" >&2
+            echo "Raw output:" >&2
+            echo "$build_output" >&2
             exit 1
           fi
-          
-          echo "Monitoring build ID: $BUILD_ID"
-          echo "Build URL: https://expo.dev/accounts/$(eas whoami 2>/dev/null || echo 'unknown')/builds/$BUILD_ID"
 
-          # Poll for build completion
-          ARTIFACT_URL=""
-          for i in $(seq 1 ${POLL_ATTEMPTS}); do
-            echo "Polling attempt $i/${POLL_ATTEMPTS}..."
+          if ! echo "$json_candidate" | jq -e '.' >/dev/null 2>&1; then
+            echo "ERROR: Extracted JSON is invalid" >&2
+            echo "$json_candidate" >&2
+            exit 1
+          fi
 
-            # Use the correct build:view syntax (pass build id as positional arg).
-            # Fall back to build:list and select the matching id if view fails.
-            build_json=$(eas build:view "$BUILD_ID" --json 2>/dev/null || \
-                        eas build:list --platform android --limit 10 --non-interactive --json 2>/dev/null | jq ".[] | select(.id==\"$BUILD_ID\")" 2>/dev/null || \
-                        echo '{}')
+          build_json="$json_candidate"
 
-            # Validate JSON before attempting to parse with jq
-            if ! echo "$build_json" | jq -e '.' >/dev/null 2>&1; then
-              echo "WARNING: Received non-JSON build info (will retry):"
-              echo "$build_json"
-              sleep ${POLL_SLEEP_SECONDS}
-              continue
-            fi
+          BUILD_ID=$(echo "$build_json" | jq -r '.id // empty')
+          ARTIFACT_URL=$(echo "$build_json" | jq -r '(.artifacts.buildUrl // .artifacts[]?.url // .artifacts.applicationArchiveUrl // empty) | select(. != null and . != "")' | head -n1)
 
-            # Normalize status to lowercase for comparison. Use a safe fallback if status is absent.
-            build_status=$(echo "$build_json" | jq -r '.status // empty | ascii_downcase')
-            echo "Build status: ${build_status:-<empty>}"
-            
-            # Check for completion
-            if [ -z "$build_status" ]; then
-              echo "WARNING: build_status empty, logging build_json and retrying..."
-              echo "$build_json" | jq '.' || true
-              sleep ${POLL_SLEEP_SECONDS}
-              continue
-            fi
-
-            if [ "$build_status" = "finished" ]; then
-              echo "Build completed successfully!"
-              
-              # Try multiple artifact URL paths (different CLI versions use different fields)
-              ARTIFACT_URL=$(echo "$build_json" | jq -r '
-                (.artifacts.buildUrl // .artifacts[]?.url // .artifacts.applicationArchiveUrl // empty) | select(. != null and . != "")
-              ' | head -n1)
-              
-              if [ -n "$ARTIFACT_URL" ] && [ "$ARTIFACT_URL" != "null" ]; then
-                echo "Found artifact URL: $ARTIFACT_URL"
-                break
-              else
-                echo "WARNING: Build finished but no artifact URL found"
-                echo "Full build JSON:"
-                echo "$build_json" | jq '.'
-                exit 1
-              fi
-              
-            elif [ "$build_status" = "errored" ] || [ "$build_status" = "error" ]; then
-              echo "ERROR: Build failed with status: $build_status" >&2
-              echo "Build error details:" >&2
-              echo "$build_json" | jq '.' >&2
-              exit 1
-              
-            elif [ "$build_status" = "canceled" ] || [ "$build_status" = "cancelled" ]; then
-              echo "ERROR: Build was canceled" >&2
-              echo "$build_json" | jq '.' >&2
-              exit 1
-              
-            else
-              # in-progress, in-queue, pending, etc.
-              echo "Build still in progress (status: $build_status), waiting ${POLL_SLEEP_SECONDS}s..."
-              sleep ${POLL_SLEEP_SECONDS}
-            fi
-          done
-
-          # Check if we timed out
-          if [ -z "$ARTIFACT_URL" ] || [ "$ARTIFACT_URL" = "null" ]; then
-            echo "ERROR: Build did not complete within timeout period (${POLL_ATTEMPTS} attempts × ${POLL_SLEEP_SECONDS}s)" >&2
-            echo "Last known build status:" >&2
+          if [ -z "$BUILD_ID" ]; then
+            echo "ERROR: Could not determine build id from build JSON" >&2
             echo "$build_json" | jq '.' >&2
             exit 1
           fi
 
-          # Download artifact
+          echo "Build completed: $BUILD_ID"
+          echo "Build URL: https://expo.dev/accounts/$(eas whoami 2>/dev/null || echo 'unknown')/builds/$BUILD_ID"
+
+          if [ -z "$ARTIFACT_URL" ] || [ "$ARTIFACT_URL" = "null" ]; then
+            echo "ERROR: Build finished but no artifact URL found" >&2
+            echo "$build_json" | jq '.' >&2
+            exit 1
+          fi
+
+          echo "Found artifact URL: $ARTIFACT_URL"
+
           mkdir -p build_artifacts
           timestamp=$(date +%Y%m%d-%H%M%S)
           filename="app-android-${timestamp}-${BUILD_ID:0:8}.apk"
+
           echo "Downloading artifact to build_artifacts/$filename..."
-          
-          if ! curl -L --fail --retry 3 --retry-delay 5 "$ARTIFACT_URL" -o "build_artifacts/$filename"; then
-            echo "ERROR: Failed to download artifact from $ARTIFACT_URL" >&2
-            exit 1
-          fi
-          
-          # Verify download
+          curl -L --fail --retry 3 --retry-delay 5 "$ARTIFACT_URL" -o "build_artifacts/$filename"
+
           if [ ! -f "build_artifacts/$filename" ] || [ ! -s "build_artifacts/$filename" ]; then
-            echo "ERROR: Downloaded file is missing or empty" >&2
+            echo "ERROR: Download failed or file empty" >&2
             exit 1
           fi
-          
+
           file_size=$(stat -f%z "build_artifacts/$filename" 2>/dev/null || stat -c%s "build_artifacts/$filename" 2>/dev/null || echo "unknown")
           echo "Downloaded APK size: $file_size bytes"
 
-          # Create GitHub release
           echo "Creating GitHub release..."
           tag="android-build-${{ github.run_id }}"
           name="Android Build #${{ github.run_number }}"
@@ -201,25 +142,22 @@ jobs:
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/${{ github.repository }}/releases" \
             -d "{\"tag_name\": \"$tag\", \"name\": \"$name\", \"body\": \"$body\", \"draft\": false, \"prerelease\": false}")
-          
+
           upload_url=$(echo "$release_response" | jq -r '.upload_url | select(. != null)' | sed -e 's/{?name,label}//')
 
           if [ -z "$upload_url" ] || [ "$upload_url" = "null" ]; then
             echo "ERROR: Could not create GitHub release" >&2
-            echo "Response from GitHub API:" >&2
             echo "$release_response" | jq '.' >&2
             exit 1
           fi
 
-          # Upload APK to release
           echo "Uploading APK to release..."
           upload_response=$(curl -s --fail-with-body -X POST \
             -H "Authorization: token $GITHUB_TOKEN" \
             -H "Content-Type: application/vnd.android.package-archive" \
             --data-binary @"build_artifacts/$filename" \
             "$upload_url?name=$filename" 2>&1 || true)
-          
-          # Check if upload succeeded
+
           if echo "$upload_response" | jq -e '.browser_download_url' >/dev/null 2>&1; then
             download_url=$(echo "$upload_response" | jq -r '.browser_download_url')
             echo "✅ Upload complete!"
