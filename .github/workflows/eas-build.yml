@@ -99,23 +99,33 @@ jobs:
           ARTIFACT_URL=""
           for i in $(seq 1 ${POLL_ATTEMPTS}); do
             echo "Polling attempt $i/${POLL_ATTEMPTS}..."
-            
-            # Try to use build:view for specific build (more efficient)
-            build_json=$(eas build:view --platform android --id "$BUILD_ID" --json 2>/dev/null || \
-                        eas build:list --platform android --limit 10 --non-interactive --json 2>/dev/null | jq ".[] | select(.id==\"$BUILD_ID\")" || \
+
+            # Use the correct build:view syntax (pass build id as positional arg).
+            # Fall back to build:list and select the matching id if view fails.
+            build_json=$(eas build:view "$BUILD_ID" --json 2>/dev/null || \
+                        eas build:list --platform android --limit 10 --non-interactive --json 2>/dev/null | jq ".[] | select(.id==\"$BUILD_ID\")" 2>/dev/null || \
                         echo '{}')
-            
-            if [ "$build_json" = "{}" ] || [ -z "$build_json" ]; then
-              echo "WARNING: Could not fetch build info, retrying..."
+
+            # Validate JSON before attempting to parse with jq
+            if ! echo "$build_json" | jq -e '.' >/dev/null 2>&1; then
+              echo "WARNING: Received non-JSON build info (will retry):"
+              echo "$build_json"
               sleep ${POLL_SLEEP_SECONDS}
               continue
             fi
-            
-            # Normalize status to lowercase for comparison
-            build_status=$(echo "$build_json" | jq -r '.status | ascii_downcase')
-            echo "Build status: $build_status"
+
+            # Normalize status to lowercase for comparison. Use a safe fallback if status is absent.
+            build_status=$(echo "$build_json" | jq -r '.status // empty | ascii_downcase')
+            echo "Build status: ${build_status:-<empty>}"
             
             # Check for completion
+            if [ -z "$build_status" ]; then
+              echo "WARNING: build_status empty, logging build_json and retrying..."
+              echo "$build_json" | jq '.' || true
+              sleep ${POLL_SLEEP_SECONDS}
+              continue
+            fi
+
             if [ "$build_status" = "finished" ]; then
               echo "Build completed successfully!"
               
